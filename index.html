@@ -1045,12 +1045,21 @@ async function boot(){
       if(bx<b.bx+FW&&bx+FW>b.bx&&by<b.by+FH&&by+FH>b.by) return true; }
     return false;
   }
+  // a moved board must stay flush against another board — no detached, far-flung boards
+  // (also bounds the pasture extent, so grid allocations can't blow up)
+  function boardTouches(p,f,bx,by){
+    for(let j=0;j<p.fields.length;j++){ if(j===f) continue; const b=p.fields[j];
+      const vOverlap=by<b.by+FH&&by+FH>b.by, hOverlap=bx<b.bx+FW&&bx+FW>b.bx;
+      if(vOverlap&&(bx===b.bx+FW||bx+FW===b.bx)) return true;
+      if(hOverlap&&(by===b.by+FH||by+FH===b.by)) return true; }
+    return false;
+  }
   function moveBoard(e){
     drag.cand=null; killGhost();
     const p=players[drag.i], pv=pastureOf(drag.i); if(!pv) return;
     const dx=e.clientX-drag.startX, dy=e.clientY-drag.startY;
     const nbx=drag.bx0+Math.round(dx/CELL), nby=drag.by0+Math.round(dy/CELL);
-    const ok=!boardOverlaps(p,drag.f,nbx,nby);
+    const ok=!boardOverlaps(p,drag.f,nbx,nby)&&boardTouches(p,drag.f,nbx,nby);
     // ghost drawn in the current (normalized) pasture coord space; may overflow — that's fine
     const g=document.createElement('div'); g.className='dragghost boardghost '+(ok?'ok':'bad');
     g.style.left=(nbx*CELL)+'px'; g.style.top=(nby*CELL)+'px';
