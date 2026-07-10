@@ -50,8 +50,12 @@
   .p-meta .k{color:var(--ink2);font-weight:800}
 
   /* field boards: 8×4, dashed grid + fence posts, like the real boards */
-  .fields{display:flex;flex-wrap:wrap;gap:16px 12px;padding-bottom:8px}
-  .fieldboard{position:relative;width:calc(var(--cell)*16 + 8px);height:calc(var(--cell)*8 + 8px);
+  .fields{display:flex;justify-content:center;padding:6px 10px 22px}
+  .pasture{position:relative;overflow:visible}
+  .pasture.multi .fieldboard{cursor:grab}
+  .fieldboard.fdrag{cursor:grabbing;opacity:.9;box-shadow:0 0 0 3px var(--gold),0 6px 16px rgba(40,60,20,.45)}
+  .pigs-layer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:2}
+  .fieldboard{position:absolute;width:calc(var(--cell)*16 + 8px);height:calc(var(--cell)*8 + 8px);
     border-radius:8px;border:4px solid #f2ecd2;
     background:
       url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34"><path d="M16.5 0 V34 M0 16.5 H34" stroke="%234c8a28" stroke-width="1" stroke-dasharray="3 3" fill="none" opacity="0.3"/><path d="M33.5 0 V34 M0 33.5 H34" stroke="%234c8a28" stroke-width="1.4" stroke-dasharray="4 3" fill="none" opacity="0.55"/></svg>') repeat,
@@ -62,11 +66,12 @@
     border-top:2px solid #8a5a33;
     background:repeating-linear-gradient(90deg,transparent 0 30px,#8a5a33 30px 35px);opacity:.75}
   .pigtile{position:absolute;border-radius:6px;display:flex;align-items:center;justify-content:center;
-    overflow:hidden;box-shadow:0 2px 3px rgba(60,90,30,.45);
+    overflow:hidden;box-shadow:0 2px 3px rgba(60,90,30,.45);pointer-events:auto;
     transition:transform .15s;cursor:grab;z-index:1;touch-action:none}
   .pigtile img.pigart{width:100%;height:100%;object-fit:fill;display:block;-webkit-user-drag:none}
   .pigtile.dragging{transition:none;cursor:grabbing;opacity:.85}
   .dragghost{position:absolute;border:3px dashed #fff;border-radius:6px;z-index:4;pointer-events:none}
+  .dragghost.boardghost{border-width:4px;border-radius:8px}
   .dragghost.ok{border-color:#fff;background:rgba(255,255,255,.35)}
   .dragghost.bad{border-color:#d33;background:rgba(220,60,60,.3)}
   .pigtile.pick{cursor:pointer;box-shadow:0 0 0 3px var(--gold),0 2px 3px rgba(60,90,30,.4)}
@@ -247,7 +252,7 @@ function initChrome(){
       <span class="mitem">🟩 fields <span class="c">$10/$15/$20+</span></span>
     </div>
     <div class="mrow rules">
-      <span>pigs must fit your fields — drag to rearrange, any time</span><span>·</span>
+      <span>drag pigs to rearrange &amp; drag field boards to reposition them — pigs may straddle two touching boards</span><span>·</span>
       <span>unvaccinated pigs die at each season change; vaccines persist until sold</span><span>·</span>
       <span>finale: only vaccinated pigs sell</span>
     </div>`;
@@ -260,53 +265,83 @@ let players=[], nP=2;
 const state={season:0,round:1,startIdx:0,card:null,roundSerial:0};
 
 function mkPlayer(name,human){
-  return {name,human,coins:45,fields:1,pigs:[],items:{vaccine:0,supplement:0,amulet:0},soldThisRound:0};
+  return {name,human,coins:45,fields:[{bx:0,by:0}],pigs:[],items:{vaccine:0,supplement:0,amulet:0},soldThisRound:0};
 }
-function mkPig(size){return {id:++uid,size,vacc:false,f:0,x:0,y:0,fedRound:-1,matedRound:-1}}
+function mkPig(size){return {id:++uid,size,vacc:false,x:0,y:0,fedRound:-1,matedRound:-1}}
 
-/* ===== placement (real 8×4 grids) ===== */
-function occ(p,f,ignoreId){
-  const g=Array.from({length:FH},()=>Array(FW).fill(false));
-  p.pigs.forEach(pg=>{ if(pg.f!==f||pg.id===ignoreId) return;
+/* ===== placement: field boards live on one shared fine grid; pigs use global
+   (x,y) cells and may straddle any seam between adjacent boards ===== */
+/* pasture = bounding box of all boards + which global cells are farmable */
+function pasture(p){
+  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
+  for(const b of p.fields){ if(b.bx<minx)minx=b.bx; if(b.by<miny)miny=b.by;
+    if(b.bx+FW>maxx)maxx=b.bx+FW; if(b.by+FH>maxy)maxy=b.by+FH; }
+  const W=maxx-minx, H=maxy-miny;
+  const farm=Array.from({length:H},()=>Array(W).fill(false));
+  for(const b of p.fields) for(let y=0;y<FH;y++)for(let x=0;x<FW;x++) farm[b.by-miny+y][b.bx-minx+x]=true;
+  return {minx,miny,W,H,farm};
+}
+/* keep the top-left board at (0,0); shift pigs with it so coords stay non-negative */
+function normalize(p){
+  let minx=Infinity,miny=Infinity;
+  for(const b of p.fields){ if(b.bx<minx)minx=b.bx; if(b.by<miny)miny=b.by; }
+  if(!isFinite(minx)||(!minx&&!miny)) return;
+  for(const b of p.fields){ b.bx-=minx; b.by-=miny; }
+  for(const pg of p.pigs){ pg.x-=minx; pg.y-=miny; }
+}
+function addField(p){
+  let maxx=0; for(const b of p.fields) maxx=Math.max(maxx,b.bx+FW);
+  p.fields.push({bx:maxx,by:0}); normalize(p);
+}
+function occGrid(p,ignoreId){
+  const {W,H}=pasture(p);
+  const g=Array.from({length:H},()=>Array(W).fill(false));
+  for(const pg of p.pigs){ if(pg.id===ignoreId) continue;
     const [w,h]=SPAN[pg.size];
-    for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++){ if(pg.y+dy<FH&&pg.x+dx<FW) g[pg.y+dy][pg.x+dx]=true; }});
+    for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++){ const yy=pg.y+dy,xx=pg.x+dx;
+      if(yy>=0&&yy<H&&xx>=0&&xx<W) g[yy][xx]=true; }}
   return g;
 }
-function canPlaceAt(p,f,x,y,size,ignoreId){
-  const [w,h]=SPAN[size];
-  if(x<0||y<0||x+w>FW||y+h>FH) return false;
-  const g=occ(p,f,ignoreId);
-  for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++) if(g[y+dy][x+dx]) return false;
+/* a pig fits at (x,y) iff every covered cell is farmable and unoccupied */
+function canPlaceAt(p,x,y,size,ignoreId){
+  const [w,h]=SPAN[size]; const {W,H,farm}=pasture(p);
+  if(x<0||y<0||x+w>W||y+h>H) return false;
+  const g=occGrid(p,ignoreId);
+  for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++){ if(!farm[y+dy][x+dx]||g[y+dy][x+dx]) return false; }
   return true;
 }
 function findSpot(p,size,ignoreId){
-  for(let f=0;f<p.fields;f++)for(let y=0;y<FH;y++)for(let x=0;x<FW;x++)
-    if(canPlaceAt(p,f,x,y,size,ignoreId)) return {f,x,y};
+  const [w,h]=SPAN[size]; const {W,H,farm}=pasture(p); const g=occGrid(p,ignoreId);
+  for(let y=0;y<=H-h;y++)for(let x=0;x<=W-w;x++){
+    let ok=true;
+    for(let dy=0;dy<h&&ok;dy++)for(let dx=0;dx<w&&ok;dx++){ if(!farm[y+dy][x+dx]||g[y+dy][x+dx]) ok=false; }
+    if(ok) return {x,y};
+  }
   return null;
 }
-/* greedy repack: place pigs largest-first; returns positions or null */
-function packAll(p,extraSizes,growPig){
-  const list=p.pigs.map(pg=>({id:pg.id,size:pg.id===(growPig&&growPig.id)?growPig.size:pg.size}));
-  (extraSizes||[]).forEach(s=>list.push({id:'new'+Math.abs(uid+list.length),size:s,isNew:true}));
+/* greedy repack: place pigs largest-first onto the farmable region; positions or null */
+function packAll(p,extraSizes,grow){
+  const list=p.pigs.map(pg=>({id:pg.id,size:pg.id===(grow&&grow.id)?grow.size:pg.size}));
+  (extraSizes||[]).forEach((s,k)=>list.push({id:'new'+k+'_'+Math.abs(uid+list.length),size:s,isNew:true}));
   const area=s=>SPAN[s][0]*SPAN[s][1];
   list.sort((a,b)=>area(b.size)-area(a.size));
-  const grids=Array.from({length:p.fields},()=>Array.from({length:FH},()=>Array(FW).fill(false)));
+  const {W,H,farm}=pasture(p);
+  const used=Array.from({length:H},()=>Array(W).fill(false));
   const pos={};
   for(const it of list){
     const [w,h]=SPAN[it.size]; let placed=false;
-    for(let f=0;f<p.fields&&!placed;f++)
-      for(let y=0;y<=FH-h&&!placed;y++)
-        for(let x=0;x<=FW-w&&!placed;x++){
-          let ok=true;
-          for(let dy=0;dy<h&&ok;dy++)for(let dx=0;dx<w&&ok;dx++) if(grids[f][y+dy][x+dx]) ok=false;
-          if(ok){ for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++) grids[f][y+dy][x+dx]=true;
-            pos[it.id]={f,x,y}; placed=true; }
-        }
+    for(let y=0;y<=H-h&&!placed;y++)
+      for(let x=0;x<=W-w&&!placed;x++){
+        let ok=true;
+        for(let dy=0;dy<h&&ok;dy++)for(let dx=0;dx<w&&ok;dx++){ if(!farm[y+dy][x+dx]||used[y+dy][x+dx]) ok=false; }
+        if(ok){ for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++) used[y+dy][x+dx]=true;
+          pos[it.id]={x,y}; placed=true; }
+      }
     if(!placed) return null;
   }
   return pos;
 }
-function applyPack(p,pos){ p.pigs.forEach(pg=>{ const q=pos[pg.id]; if(q){pg.f=q.f;pg.x=q.x;pg.y=q.y;} }); }
+function applyPack(p,pos){ p.pigs.forEach(pg=>{ const q=pos[pg.id]; if(q){pg.x=q.x;pg.y=q.y;} }); }
 /* try to place a new pig: direct spot, else full repack */
 function acquirePig(p,size){
   const spot=findSpot(p,size);
@@ -320,14 +355,20 @@ function canFitNew(p,size){ return !!(findSpot(p,size)||packAll(p,[size])); }
 /* grow a pig one step; keeps anchor if possible, else repack; false if impossible */
 function growPig(p,pg){
   const ns=NEXT[pg.size]; if(!ns) return false;
-  if(canPlaceAt(p,pg.f,pg.x,pg.y,ns,pg.id)){ pg.size=ns; return true; }
+  if(canPlaceAt(p,pg.x,pg.y,ns,pg.id)){ pg.size=ns; return true; }
   const spot=findSpot(p,ns,pg.id); if(spot){ pg.size=ns; Object.assign(pg,spot); return true; }
   const pos=packAll(p,null,{id:pg.id,size:ns});
   if(pos){ pg.size=ns; applyPack(p,pos); return true; }
   return false;
 }
 function canGrow(p,pg){ const ns=NEXT[pg.size]; if(!ns) return false;
-  return canPlaceAt(p,pg.f,pg.x,pg.y,ns,pg.id)||!!findSpot(p,ns,pg.id)||!!packAll(p,null,{id:pg.id,size:ns}); }
+  return canPlaceAt(p,pg.x,pg.y,ns,pg.id)||!!findSpot(p,ns,pg.id)||!!packAll(p,null,{id:pg.id,size:ns}); }
+/* snapshot/restore board+pig coords, so a rejected board move can revert cleanly */
+function snapPlay(p){ return {fields:p.fields.map(b=>({bx:b.bx,by:b.by})),
+  pigs:p.pigs.map(pg=>({id:pg.id,x:pg.x,y:pg.y}))}; }
+function restorePlay(p,s){ p.fields.forEach((b,i)=>{ b.bx=s.fields[i].bx; b.by=s.fields[i].by; });
+  const m={}; s.pigs.forEach(q=>m[q.id]=q);
+  p.pigs.forEach(pg=>{ const q=m[pg.id]; if(q){ pg.x=q.x; pg.y=q.y; } }); }
 
 /* ===== season deck: per card, shared quantities + an effect ===== */
 const EFFECTS={
@@ -395,26 +436,33 @@ function render(){
       `<span><span class="k">${p.pigs.length}</span> pigs (${c.piglet}·${c.small}·${c.average}·${c.big})</span>`+
       `<span>🛡️ <span class="k">${vacc}</span> vaccinated</span>`+
       `<span>💉<span class="k">${p.items.vaccine}</span> 💊<span class="k">${p.items.supplement}</span> 🧿<span class="k">${p.items.amulet}</span></span>`+
-      `<span><span class="k">${p.fields}</span> field${p.fields>1?'s':''}</span>`;
+      `<span><span class="k">${p.fields.length}</span> field${p.fields.length>1?'s':''}</span>`;
     renderFields(i);
   });
 }
 function renderFields(i){
   const p=players[i]; const box=document.getElementById('fields-'+i); box.innerHTML='';
-  for(let f=0;f<p.fields;f++){
+  normalize(p);
+  const {W,H}=pasture(p);
+  const pv=document.createElement('div'); pv.className='pasture'+(p.fields.length>1?' multi':''); pv.dataset.p=i;
+  pv.style.width=(W*CELL)+'px'; pv.style.height=(H*CELL)+'px';
+  p.fields.forEach((b,f)=>{
     const fb=document.createElement('div'); fb.className='fieldboard'; fb.dataset.f=f; fb.dataset.p=i;
-    box.appendChild(fb);
-  }
+    fb.style.left=(b.bx*CELL-4)+'px'; fb.style.top=(b.by*CELL-4)+'px';
+    pv.appendChild(fb);
+  });
+  const layer=document.createElement('div'); layer.className='pigs-layer';
   p.pigs.forEach(pg=>{
-    const fb=box.children[pg.f]; if(!fb) return;
     const [w,h]=SPAN[pg.size];
     const d=document.createElement('div'); d.className='pigtile'; d.dataset.id=pg.id;
     d.title=pg.size+(pg.vacc?' (vaccinated)':'');
-    d.style.left=(4+pg.x*CELL+1)+'px'; d.style.top=(4+pg.y*CELL+1)+'px';
+    d.style.left=(pg.x*CELL+1)+'px'; d.style.top=(pg.y*CELL+1)+'px';
     d.style.width=(w*CELL-2)+'px'; d.style.height=(h*CELL-2)+'px';
     d.innerHTML=pigArt(pg);
-    fb.appendChild(d);
+    layer.appendChild(d);
   });
+  pv.appendChild(layer);
+  box.appendChild(pv);
 }
 function pigEl(i,id){return document.querySelector(`#fields-${i} .pigtile[data-id="${id}"]`)}
 function markBorn(i,pg){render(); const el=pigEl(i,pg.id); if(el)el.classList.add('born');}
@@ -500,13 +548,13 @@ function buyOptions(p){
     {k:'vaccine',label:thumb(UI_ART.vaccine)+' Vaccine',cost:1,ok:()=>p.coins>=1},
     {k:'supplement',label:thumb(UI_ART.supplement)+' Supplement',cost:1,ok:()=>p.coins>=1},
     {k:'amulet',label:thumb(UI_ART.amulet)+' Amulet of Life',cost:1,ok:()=>p.coins>=1},
-    {k:'field',label:'🟩 Field board',cost:fieldPrice(p.fields+1),ok:()=>p.coins>=fieldPrice(p.fields+1)},
+    {k:'field',label:'🟩 Field board',cost:fieldPrice(p.fields.length+1),ok:()=>p.coins>=fieldPrice(p.fields.length+1)},
   ];
 }
 function doBuy(i,k){
   const p=players[i];
-  if(k==='field'){ const c=fieldPrice(p.fields+1); p.coins-=c; p.fields++; floatCoin(i,-c);
-    logP(i,`${esc(p.name)} bought field #${p.fields} ($${c}).`); return true; }
+  if(k==='field'){ const c=fieldPrice(p.fields.length+1); p.coins-=c; addField(p); floatCoin(i,-c);
+    logP(i,`${esc(p.name)} bought field #${p.fields.length} ($${c}).`); return true; }
   if(ITEM_PRICE[k]!==undefined){ p.coins-=ITEM_PRICE[k]; p.items[k]++; floatCoin(i,-ITEM_PRICE[k]);
     logP(i,`${esc(p.name)} bought a ${k} ($${ITEM_PRICE[k]}).`); return true; }
   const pg=acquirePig(p,k);
@@ -602,7 +650,7 @@ async function aiExecute(i,action,n){
       if(needVacc>p.items.vaccine&&p.coins>=1) k='vaccine';
       else if(p.coins>=VAL.small&&canFitNew(p,'small')&&state.season<3) k='small';
       else if(p.coins>=VAL.piglet&&canFitNew(p,'piglet')&&state.season<2) k='piglet';
-      else if(!canFitNew(p,'piglet')&&p.coins>=fieldPrice(p.fields+1)) k='field';
+      else if(!canFitNew(p,'piglet')&&p.coins>=fieldPrice(p.fields.length+1)) k='field';
       else if(p.items.supplement<1&&p.coins>=1&&state.season<3) k='supplement';
       else break;
       if(!doBuy(i,k)) break;
@@ -881,7 +929,7 @@ function endGame(){
     // tie-break: liquidate items + fields
     players.forEach(p=>{ p.tiebreak=p.coins
       +p.items.vaccine+p.items.supplement+p.items.amulet
-      +Array.from({length:p.fields},(_,n)=>fieldPrice(n+1)).reduce((a,b)=>a+b,0); });
+      +Array.from({length:p.fields.length},(_,n)=>fieldPrice(n+1)).reduce((a,b)=>a+b,0); });
     ranked=players.map((p,i)=>({p,i,g:gains[i]})).sort((a,b)=>(b.p.tiebreak??b.p.coins)-(a.p.tiebreak??a.p.coins));
     tieNote='<p>Tie! Broken by selling items and fields.</p>';
   }
@@ -954,48 +1002,86 @@ async function boot(){
   playRound();
 }
 
-/* ===== drag & drop rearranging (own pigs, any time — official: "rearrange at any time") ===== */
+/* ===== drag & drop rearranging (own pigs AND field boards, any time) ===== */
 (function(){
-  let drag=null; // {i,pg,el,startX,startY,moved,ghost,cand}
-  function boardsOf(i){return [...document.querySelectorAll(`#fields-${i} .fieldboard`)]}
+  let drag=null; // {kind,i,...,startX,startY,moved,ghost,cand}
+  function pastureOf(i){return document.querySelector(`#fields-${i} .pasture`)}
   function killGhost(){ if(drag&&drag.ghost){drag.ghost.remove();drag.ghost=null;} }
   document.addEventListener('pointerdown',e=>{
-    const tile=e.target.closest&&e.target.closest('.pigtile'); if(!tile) return;
-    const fb=tile.closest('.fieldboard'); if(!fb) return;
-    const i=+fb.dataset.p; if(!players[i]||!players[i].human) return;
-    const pg=players[i].pigs.find(x=>x.id===+tile.dataset.id); if(!pg) return;
-    drag={i,pg,el:tile,startX:e.clientX,startY:e.clientY,moved:false,ghost:null,cand:null};
+    if(!(e.target.closest)) return;
+    const tile=e.target.closest('.pigtile');
+    if(tile){
+      const pv=tile.closest('.pasture'); if(!pv) return;
+      const i=+pv.dataset.p; if(!players[i]||!players[i].human) return;
+      const pg=players[i].pigs.find(x=>x.id===+tile.dataset.id); if(!pg) return;
+      drag={kind:'pig',i,pg,el:tile,startX:e.clientX,startY:e.clientY,moved:false,ghost:null,cand:null};
+      return;
+    }
+    const fb=e.target.closest('.fieldboard');
+    if(fb){
+      const i=+fb.dataset.p; if(!players[i]||!players[i].human) return;
+      if(players[i].fields.length<2) return; // one board — nothing to rearrange
+      const f=+fb.dataset.f; const b=players[i].fields[f];
+      drag={kind:'board',i,f,el:fb,startX:e.clientX,startY:e.clientY,moved:false,ghost:null,cand:null,bx0:b.bx,by0:b.by};
+      return;
+    }
   });
+  function movePig(e){
+    drag.cand=null; killGhost();
+    const p=players[drag.i], pv=pastureOf(drag.i); if(!pv) return;
+    const r=pv.getBoundingClientRect(); const {W,H}=pasture(p); const [w,h]=SPAN[drag.pg.size];
+    let x=Math.round((e.clientX-r.left-w*CELL/2)/CELL);
+    let y=Math.round((e.clientY-r.top-h*CELL/2)/CELL);
+    x=Math.max(0,Math.min(W-w,x)); y=Math.max(0,Math.min(H-h,y));
+    const ok=canPlaceAt(p,x,y,drag.pg.size,drag.pg.id);
+    const g=document.createElement('div'); g.className='dragghost '+(ok?'ok':'bad');
+    g.style.left=(x*CELL)+'px'; g.style.top=(y*CELL)+'px';
+    g.style.width=(w*CELL)+'px'; g.style.height=(h*CELL)+'px';
+    pv.appendChild(g); drag.ghost=g;
+    if(ok) drag.cand={x,y};
+  }
+  function boardOverlaps(p,f,bx,by){
+    for(let j=0;j<p.fields.length;j++){ if(j===f) continue; const b=p.fields[j];
+      if(bx<b.bx+FW&&bx+FW>b.bx&&by<b.by+FH&&by+FH>b.by) return true; }
+    return false;
+  }
+  function moveBoard(e){
+    drag.cand=null; killGhost();
+    const p=players[drag.i], pv=pastureOf(drag.i); if(!pv) return;
+    const dx=e.clientX-drag.startX, dy=e.clientY-drag.startY;
+    const nbx=drag.bx0+Math.round(dx/CELL), nby=drag.by0+Math.round(dy/CELL);
+    const ok=!boardOverlaps(p,drag.f,nbx,nby);
+    // ghost drawn in the current (normalized) pasture coord space; may overflow — that's fine
+    const g=document.createElement('div'); g.className='dragghost boardghost '+(ok?'ok':'bad');
+    g.style.left=(nbx*CELL)+'px'; g.style.top=(nby*CELL)+'px';
+    g.style.width=(FW*CELL)+'px'; g.style.height=(FH*CELL)+'px';
+    pv.appendChild(g); drag.ghost=g;
+    if(ok) drag.cand={bx:nbx,by:nby};
+  }
   document.addEventListener('pointermove',e=>{
     if(!drag) return;
     const dx=e.clientX-drag.startX, dy=e.clientY-drag.startY;
-    if(!drag.moved){ if(Math.hypot(dx,dy)<6) return;
-      drag.moved=true; drag.el.classList.add('dragging'); drag.el.style.pointerEvents='none'; drag.el.style.zIndex=99; }
+    if(!drag.moved){ if(Math.hypot(dx,dy)<6) return; drag.moved=true;
+      drag.el.classList.add(drag.kind==='pig'?'dragging':'fdrag');
+      drag.el.style.pointerEvents='none'; drag.el.style.zIndex=99; }
     drag.el.style.transform=`translate(${dx}px,${dy}px)`;
-    // find candidate cell under pointer among this player's boards
-    drag.cand=null; killGhost();
-    const [w,h]=SPAN[drag.pg.size];
-    for(const fb of boardsOf(drag.i)){
-      const r=fb.getBoundingClientRect();
-      if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) continue;
-      const f=+fb.dataset.f;
-      let x=Math.round((e.clientX-r.left-4-w*CELL/2)/CELL);
-      let y=Math.round((e.clientY-r.top-4-h*CELL/2)/CELL);
-      x=Math.max(0,Math.min(FW-w,x)); y=Math.max(0,Math.min(FH-h,y));
-      const ok=canPlaceAt(players[drag.i],f,x,y,drag.pg.size,drag.pg.id);
-      const g=document.createElement('div'); g.className='dragghost '+(ok?'ok':'bad');
-      g.style.left=(4+x*CELL)+'px'; g.style.top=(4+y*CELL)+'px';
-      g.style.width=(w*CELL)+'px'; g.style.height=(h*CELL)+'px';
-      fb.appendChild(g); drag.ghost=g;
-      if(ok) drag.cand={f,x,y};
-      break;
-    }
+    if(drag.kind==='pig') movePig(e); else moveBoard(e);
   });
   document.addEventListener('pointerup',()=>{
     if(!drag) return;
     const d=drag; drag=null; killGhost();
     if(d.moved){
-      if(d.cand){ d.pg.f=d.cand.f; d.pg.x=d.cand.x; d.pg.y=d.cand.y; }
+      const p=players[d.i];
+      if(d.kind==='pig'){
+        if(d.cand){ d.pg.x=d.cand.x; d.pg.y=d.cand.y; }
+      } else if(d.cand){
+        const snap=snapPlay(p);
+        p.fields[d.f].bx=d.cand.bx; p.fields[d.f].by=d.cand.by; normalize(p);
+        // any pig now off a board? try to repack; if that fails, revert the whole move
+        if(p.pigs.some(pg=>!canPlaceAt(p,pg.x,pg.y,pg.size,pg.id))){
+          const pos=packAll(p); if(pos) applyPack(p,pos); else restorePlay(p,snap);
+        }
+      }
       // swallow the click that follows a real drag so pick-handlers don't fire
       const swallow=ev=>{ev.stopPropagation();ev.preventDefault();document.removeEventListener('click',swallow,true);};
       document.addEventListener('click',swallow,true);
