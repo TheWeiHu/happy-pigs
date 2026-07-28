@@ -11,10 +11,24 @@ const script=raw
   .replace(/^initChrome\(\);$/m,'')
   .replace(/if\(location\.hash\.indexOf\('demo'\)>=0\) autoDemo\(\); else setup\(\);/,'');
 const noop=()=>{};
+const makeNode=()=>{
+  const node={
+    children:[],classList:{add:noop,toggle:noop},style:{},prepend:noop,querySelector:()=>null,
+    appendChild(child){this.children.push(child)},
+    append(...children){this.children.push(...children)},
+  };
+  Object.defineProperty(node,'innerHTML',{
+    get(){return this.html||''},
+    set(value){this.html=value;if(value==='')this.children=[]},
+  });
+  return node;
+};
+const nodes=new Map();
 const document={
   addEventListener:noop,removeEventListener:noop,querySelector:()=>null,
-  getElementById:()=>({innerHTML:'',prepend:noop,appendChild:noop}),
-  createElement:()=>({classList:{add:noop},style:{},appendChild:noop,querySelector:()=>null}),
+  body:{classList:{add:noop,remove:noop}},
+  getElementById:id=>{if(!nodes.has(id))nodes.set(id,makeNode());return nodes.get(id)},
+  createElement:makeNode,
 };
 const sandbox={
   assert,console,document,window:{__speed:100000},location:{hash:''},
@@ -42,6 +56,27 @@ const tests=`
   assert.equal(doBuy(0,'field'),false);
   assert.equal(budget.coins,9);
   assert.equal(budget.fields.length,1);
+
+  players=[mkPlayer('Clicker',true)];
+  players[0].coins=30;
+  const oneBuy=humanBuys(0,1,'Buy',false);
+  const supplementButton=document.getElementById('submenu').children
+    .find(x=>x.className==='btn it-supplement');
+  const staleBuyClick=supplementButton.onclick;
+  staleBuyClick();
+  staleBuyClick();
+  await oneBuy;
+  assert.equal(players[0].items.supplement,1);
+  assert.equal(players[0].coins,29);
+
+  players=[mkPlayer('Done clicker',true)];
+  const skipBuy=humanBuys(0,1,'Buy',true);
+  const doneButton=document.getElementById('submenu').children.at(-1);
+  const staleDoneClick=doneButton.onclick;
+  staleDoneClick();
+  staleDoneClick();
+  await skipBuy;
+  assert.equal(players[0].coins,46);
 
   players=[mkPlayer('Human',true)]; nP=1; state.roundSerial=1;
   const human=players[0];

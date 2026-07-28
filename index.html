@@ -569,21 +569,25 @@ function doBuy(i,k){
 /* human buy loop: n purchases, Done allowed */
 function humanBuys(i,n,title,compensate){
   return new Promise(res=>{
-    let left=n;
+    let left=n,finished=false;
     const step=()=>{
-      if(left<=0){ res(); return; }
+      if(finished) return;
+      if(left<=0){ finished=true; res(); return; }
       activePanel(i);
       subPrompt(`<b>${esc(players[i].name)}</b> — ${title} (${left} left).`);
       const m=document.getElementById('submenu'); m.innerHTML='';
       buyOptions(players[i]).forEach(o=>{
         const b=document.createElement('button'); b.className='btn it-'+o.k;
         b.innerHTML=`${o.label} <span class="c">$${o.cost}</span>`; b.disabled=!o.ok();
-        b.onclick=()=>{ if(doBuy(i,o.k)){ left--; render(); } step(); };
+        b.onclick=()=>{ if(finished||left<=0||b.disabled) return; b.disabled=true;
+          if(doBuy(i,o.k)){ left--; render(); } step(); };
         m.appendChild(b);
       });
       const d=document.createElement('button'); d.className='btn ghost';
       d.textContent=compensate?`Done (+$${left} compensation)`:'Done';
-      d.onclick=()=>{ if(compensate&&left>0){players[i].coins+=left;floatCoin(i,left);} clearSub(); res(); };
+      d.onclick=()=>{ if(finished) return; finished=true; d.disabled=true;
+        const unused=left; left=0;
+        if(compensate&&unused>0){players[i].coins+=unused;floatCoin(i,unused);} clearSub(); res(); };
       m.appendChild(d);
     };
     step();
