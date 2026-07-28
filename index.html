@@ -588,6 +588,15 @@ function humanBuys(i,n,title,compensate){
 }
 
 /* ===== AI ===== */
+function variedBest(items,score,maxGap=0,chance=.25){
+  if(!items.length) return null;
+  const ranked=[...items].sort((a,b)=>score(b)-score(a));
+  const best=score(ranked[0]);
+  const alternatives=ranked.slice(1).filter(x=>best-score(x)<=maxGap);
+  if(alternatives.length&&Math.random()<chance)
+    return alternatives[Math.floor(Math.random()*alternatives.length)];
+  return ranked[0];
+}
 function aiOpening(i){
   const p=players[i];
   const plan=['small','small','average','vaccine','supplement'];
@@ -602,17 +611,17 @@ function aiPick(i){
   const seasonRound=state.round;             // 1..4 within season
   const finalSeason=state.season===3;
   const growable=p.pigs.filter(x=>canGrow(p,x)&&x.fedRound!==state.roundSerial);
-  const mateable=p.pigs.filter(x=>(x.size==='average'||x.size==='big'));
+  const mateable=p.pigs.filter(x=>(x.size==='average'||x.size==='big')&&x.matedRound!==state.roundSerial);
   const needVacc=p.pigs.filter(x=>!x.vacc&&VAL[x.size]>=6).length;
   // near season end: secure vaccines for valuable pigs
   if(seasonRound>=3&&needVacc>p.items.vaccine&&p.coins>=needVacc-p.items.vaccine) return 'buy';
   if(p.coins<4&&p.pigs.length>1) return 'sell';
-  if(growable.length>=2&&Math.random()<0.55) return 'feed';
-  if(mateable.length&&canFitNew(p,'piglet')&&Math.random()<0.6) return 'mate';
-  if(p.coins>=6&&!finalSeason&&Math.random()<0.5) return 'buy';
-  if(growable.length) return 'feed';
-  if(p.pigs.length) return 'sell';
-  return 'buy';
+  const options=[];
+  if(growable.length) options.push({action:'feed',score:growable.length>=2?3:2});
+  if(mateable.length>=2&&canFitNew(p,'piglet')) options.push({action:'mate',score:3});
+  if(p.coins>=6&&!finalSeason) options.push({action:'buy',score:2});
+  if(p.pigs.length) options.push({action:'sell',score:1});
+  return (variedBest(options,x=>x.score)||{action:'buy'}).action;
 }
 async function aiExecute(i,action,n){
   const p=players[i]; let used=0;
@@ -621,7 +630,7 @@ async function aiExecute(i,action,n){
       const cands=p.pigs.filter(x=>x.fedRound!==state.roundSerial&&canGrow(p,x))
         .sort((a,b)=>VAL[b.size]-VAL[a.size]);
       if(!cands.length) break;
-      const pg=cands[0];
+      const pg=variedBest(cands,x=>VAL[NEXT[x.size]]-VAL[x.size],1);
       let steps=1;
       if(p.items.supplement>0&&(pg.size==='piglet'||pg.size==='small')){p.items.supplement--;steps=2;}
       let grown=0; for(let k=0;k<steps;k++){ if(growPig(p,pg)) grown++; }
@@ -633,13 +642,15 @@ async function aiExecute(i,action,n){
   } else if(action==='mate'){
     while(used<n){
       const cands=p.pigs.filter(x=>(x.size==='average'||x.size==='big')&&x.matedRound!==state.roundSerial);
-      if(!cands.length) break;
-      const pg=cands[0]; pg.matedRound=state.roundSerial;
+      if(cands.length<2) break;
+      const first=variedBest(cands,()=>0);
+      const second=variedBest(cands.filter(x=>x.id!==first.id),()=>0);
+      first.matedRound=second.matedRound=state.roundSerial;
       let bornSize='piglet';
       if(p.items.amulet>0&&canFitNew(p,'small')){p.items.amulet--;bornSize='small';}
       const baby=acquirePig(p,bornSize);
       used++;
-      if(baby){ markBorn(i,baby); logP(i,`${esc(p.name)}'s ${pg.size} had a <b>${bornSize}</b>${bornSize==='small'?' (amulet)':''}.`); }
+      if(baby){ markBorn(i,baby); logP(i,`${esc(p.name)}'s ${first.size} + ${second.size} pair had a <b>${bornSize}</b>${bornSize==='small'?' (amulet)':''}.`); }
       else log('sys',`${esc(p.name)}'s piglet had no room — returned to reserve.`);
       await wait(380);
     }
@@ -661,7 +672,7 @@ async function aiExecute(i,action,n){
     while(used<n&&used<target){
       const cands=[...p.pigs].sort((a,b)=>VAL[b.size]-VAL[a.size]);
       if(!cands.length) break;
-      const pg=cands[0]; if(VAL[pg.size]<6&&p.coins>10) break;
+      const pg=variedBest(cands,x=>VAL[x.size],4); if(VAL[pg.size]<6&&p.coins>10) break;
       const el=pigEl(i,pg.id); if(el)el.classList.add('dying'); await wait(400);
       p.pigs=p.pigs.filter(x=>x.id!==pg.id); p.coins+=VAL[pg.size]; p.soldThisRound++;
       floatCoin(i,VAL[pg.size]); render();
@@ -716,21 +727,26 @@ function humanFeed(i,n){
 }
 function humanMate(i,n){
   return new Promise(res=>{
-    const p=players[i]; let left=n;
-    const finish=()=>{ if(left>0){p.coins+=left;floatCoin(i,left);logP(i,`${esc(p.name)} took $${left} compensation.`);} clearSub(); render(); res(); };
+    const p=players[i]; let left=n,first=null;
+    const eligible=()=>p.pigs.filter(pg=>(pg.size==='average'||pg.size==='big')&&pg.matedRound!==state.roundSerial);
+    const finish=()=>{ first=null; if(left>0){p.coins+=left;floatCoin(i,left);logP(i,`${esc(p.name)} took $${left} compensation.`);} clearSub(); render(); res(); };
     const step=()=>{
       if(left<=0){ finish(); return; }
+      const available=eligible();
+      if((!first&&available.length<2)||(first&&!available.some(pg=>pg.id!==first.id))){ finish(); return; }
       render();
-      pickOwnPig(i,pg=>(pg.size==='average'||pg.size==='big')&&pg.matedRound!==state.roundSerial,
-        `<b>${esc(p.name)}</b> — Mate: pick an Average/Big pig (${left} left).`,
+      pickOwnPig(i,pg=>eligible().includes(pg)&&(!first||pg.id!==first.id),
+        `<b>${esc(p.name)}</b> — Mate: pick ${first?'the second parent':'the first of 2 parents'} (${left} pair${left===1?'':'s'} left).`,
         pg=>{
+          if(!first){ first=pg; step(); return; }
+          const parents=[first,pg]; first=null;
           const doIt=(useAmulet)=>{
-            pg.matedRound=state.roundSerial;
+            parents.forEach(parent=>parent.matedRound=state.roundSerial);
             const size=useAmulet?'small':'piglet';
             if(useAmulet)p.items.amulet--;
             const baby=acquirePig(p,size);
             left--;
-            if(baby){markBorn(i,baby);logP(i,`${esc(p.name)}'s ${pg.size} had a <b>${size}</b>.`);}
+            if(baby){markBorn(i,baby);logP(i,`${esc(p.name)}'s ${parents[0].size} + ${parents[1].size} pair had a <b>${size}</b>.`);}
             else log('sys','No room — the newborn was returned to the reserve.');
             step();
           };
@@ -745,6 +761,7 @@ function humanMate(i,n){
           } else doIt(false);
         },
         finish,`Done (+$${left})`);
+      if(first){ const el=pigEl(i,first.id); if(el){el.classList.remove('dim');el.classList.add('sel');} }
     };
     step();
   });
@@ -779,7 +796,7 @@ function askAction(i){
     const tiles=document.getElementById('tiles'); tiles.innerHTML='';
     ACTIONS.forEach(a=>{
       const el=document.createElement('div'); el.className='tile k-'+a;
-      const d={feed:'grow pigs +1 size',mate:'Avg/Big pigs birth piglets',buy:'pigs · items · fields',sell:'sell at market price'}[a];
+      const d={feed:'grow pigs +1 size',mate:'pair 2 Avg/Big pigs → 1 piglet',buy:'pigs · items · fields',sell:'sell at market price'}[a];
       el.innerHTML=`<img class="atile" draggable="false" src="${UI_ART[a]}"><span class="t">${ANAME[a]}</span><span class="d">${d}</span>`;
       el.onclick=()=>{ clearTiles(); clearSub(); res(a); };
       tiles.appendChild(el);
