@@ -553,10 +553,13 @@ function buyOptions(p){
 }
 function doBuy(i,k){
   const p=players[i];
-  if(k==='field'){ const c=fieldPrice(p.fields.length+1); p.coins-=c; addField(p); floatCoin(i,-c);
+  if(k==='field'){ const c=fieldPrice(p.fields.length+1); if(p.coins<c) return false;
+    p.coins-=c; addField(p); floatCoin(i,-c);
     logP(i,`${esc(p.name)} bought field #${p.fields.length} ($${c}).`); return true; }
-  if(ITEM_PRICE[k]!==undefined){ p.coins-=ITEM_PRICE[k]; p.items[k]++; floatCoin(i,-ITEM_PRICE[k]);
+  if(ITEM_PRICE[k]!==undefined){ if(p.coins<ITEM_PRICE[k]) return false;
+    p.coins-=ITEM_PRICE[k]; p.items[k]++; floatCoin(i,-ITEM_PRICE[k]);
     logP(i,`${esc(p.name)} bought a ${k} ($${ITEM_PRICE[k]}).`); return true; }
+  if(VAL[k]===undefined||p.coins<VAL[k]) return false;
   const pg=acquirePig(p,k);
   if(!pg){ log('sys',`${esc(p.name)} couldn't fit a ${k} — purchase cancelled.`); return false; }
   p.coins-=VAL[k]; floatCoin(i,-VAL[k]); markBorn(i,pg);

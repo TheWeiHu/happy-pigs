@@ -27,6 +27,22 @@ const tests=`
   const quiet=()=>{};
   render=quiet; pigEl=()=>null; markBorn=quiet; logP=quiet; log=quiet; floatCoin=quiet;
 
+  players=[mkPlayer('Budget',true)];
+  const budget=players[0];
+  budget.coins=1;
+  assert.equal(doBuy(0,'vaccine'),true);
+  assert.equal(doBuy(0,'vaccine'),false);
+  assert.equal(budget.coins,0);
+  assert.equal(budget.items.vaccine,1);
+  budget.coins=2;
+  assert.equal(doBuy(0,'piglet'),false);
+  assert.equal(budget.coins,2);
+  assert.equal(budget.pigs.length,0);
+  budget.coins=9;
+  assert.equal(doBuy(0,'field'),false);
+  assert.equal(budget.coins,9);
+  assert.equal(budget.fields.length,1);
+
   players=[mkPlayer('Human',true)]; nP=1; state.roundSerial=1;
   const human=players[0];
   acquirePig(human,'average'); acquirePig(human,'average');
