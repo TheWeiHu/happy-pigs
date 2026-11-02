@@ -4,12 +4,12 @@ const path=require('node:path');
 const vm=require('node:vm');
 
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
-const raw=html.match(/<script>([\s\S]*)<\/script>/)[1];
+const raw=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 new vm.Script(raw);
 
 const script=raw
   .replace(/^initChrome\(\);$/m,'')
-  .replace(/if\(location\.hash\.indexOf\('demo'\)>=0\) autoDemo\(\); else setup\(\);/,'');
+  .replace(/^if\(location\.hash\.indexOf.*$/m,'');
 const noop=()=>{};
 const makeNode=()=>{
   const node={
@@ -35,6 +35,7 @@ const sandbox={
   getComputedStyle:()=>({getPropertyValue:()=>''}),setTimeout:fn=>fn(),
 };
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'..','game-core.js'),'utf8'),sandbox);
 
 const tests=`
 (async()=>{

@@ -1,0 +1,15 @@
+{
+  "name": "happy-pigs",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "dev": "npm run build && wrangler dev --ip 0.0.0.0 --persist-to \"${HAPPY_PIGS_DATA_DIR:-$HOME/Dropbox/Apps/happy-pigs-data}/wrangler\"",
+    "test": "node tests/game-logic.test.js && node --test tests/room.test.cjs",
+    "test:e2e": "playwright test",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "wrangler": "4.156.1"
+  }
+}
