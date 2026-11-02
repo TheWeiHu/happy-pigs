@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Happy Pigs</title>
+<meta name="online-origin" content="https://happy-pigs.impetuous.ai">
 <style>
   :root{
     --cream:#f6edd6; --card:#fffdf6; --ink:#5b4636; --ink2:#93795c;
@@ -50,8 +51,8 @@
   .p-meta .k{color:var(--ink2);font-weight:800}
 
   /* field boards: 8×4, dashed grid + fence posts, like the real boards */
-  .fields{display:flex;justify-content:center;padding:6px 10px 22px}
-  .pasture{position:relative;overflow:visible}
+  .fields{display:flex;justify-content:flex-start;overflow:auto;padding:6px 10px 22px}
+  .pasture{position:relative;overflow:visible;flex-shrink:0;margin-inline:auto}
   .pasture.multi .fieldboard{cursor:grab}
   .fieldboard.fdrag{cursor:grabbing;opacity:.9;box-shadow:0 0 0 3px var(--gold),0 6px 16px rgba(40,60,20,.45)}
   .pigs-layer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:2}
@@ -191,6 +192,28 @@
   .seg button.on{background:linear-gradient(180deg,var(--barn),var(--barn2));color:#fff5e6}
   .pass-name{font-size:30px;font-weight:900;margin:8px 0}
   .vrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #efe3c4}
+  .online-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 20px;background:#fffef8;font-weight:700}
+  .online-bar [role="alert"]{flex:1}
+  .online-form{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:16px 0}
+  .online-overlay input{width:100%;min-width:0;padding:10px;font:inherit;border:2px solid var(--line);border-radius:10px;margin:6px 0}
+  .online-overlay .btn{margin:4px}
+  .online-seat{text-align:left;flex-wrap:wrap}
+  .online-reveal{display:flex;flex-wrap:wrap;gap:12px;width:100%;font-weight:700}
+  .online-reveal p{margin:0}
+  .pigtile:focus-visible{outline:3px solid #2563eb;outline-offset:3px}
+  @media(max-width:600px){
+    header{flex-wrap:wrap;gap:8px;padding:10px}
+    header h1{font-size:21px}
+    main{padding:10px}
+    .modal{padding:20px 14px}
+    .seat{flex-wrap:wrap}.seat input{min-width:0;width:100%}
+    .player{padding:10px 8px;min-width:0}
+    .p-name{font-size:16px}.p-head{gap:6px}
+    .online-bar{padding:8px 10px;font-size:13px}
+    .controls{padding:12px}
+    .tile{min-width:0;padding:10px 4px}
+    .tile .atile{width:50px;height:50px}
+  }
 </style>
 </head>
 <body>
@@ -214,16 +237,9 @@
   <div class="market" id="noteLine"></div>
 </main>
 
+<script src="game-core.js"></script>
 <script>
 /* ===== constants (official) ===== */
-const SIZES=['piglet','small','average','big'];
-const VAL={piglet:3,small:6,average:10,big:15};
-/* footprints from the real tiles' proportions: piglet/average square, small 3:2, big 4:3 */
-const SPAN={piglet:[2,2],small:[3,2],average:[3,3],big:[4,3]}; // [w,h] on the 16×8 fine grid
-const NEXT={piglet:'small',small:'average',average:'big'};
-const ITEM_PRICE={vaccine:1,supplement:1,amulet:1};
-const FW=16, FH=8;
-const fieldPrice=n=>n<=1?0:10+5*(n-2); // 2nd $10, 3rd $15, 4th $20, +$5…
 function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()||'#888'}
 const SEASONS=[{name:'Spring',v:'--spring',ico:'🌱'},{name:'Summer',v:'--summer',ico:'☀️'},{name:'Autumn',v:'--autumn',ico:'🍂'},{name:'Winter',v:'--winter',ico:'❄️'}];
 const PCOL=['--p0','--p1','--p2'];
@@ -260,149 +276,18 @@ function initChrome(){
 initChrome();
 
 /* ===== state ===== */
-let uid=0;
+
 let players=[], nP=2;
 const state={season:0,round:1,startIdx:0,card:null,roundSerial:0};
+const rules=HappyPigsRules.createRules({getPlayers:()=>players,getState:()=>state,random:()=>Math.random(),
+  hooks:{markBorn:(...a)=>markBorn(...a),log:(...a)=>log(...a),logP:(...a)=>logP(...a),floatCoin:(...a)=>floatCoin(...a)}});
+const {SIZES,VAL,SPAN,NEXT,ITEM_PRICE,FW,FH,fieldPrice,mkPlayer,mkPig,pasture,normalize,addField,occGrid,canPlaceAt,findSpot,packAll,applyPack,acquirePig,canFitNew,growPig,canGrow,snapPlay,restorePlay,EFFECTS,buildDeck,doBuy,distribute,variedBest,aiPick}=rules;
 
-function mkPlayer(name,human){
-  return {name,human,coins:45,fields:[{bx:0,by:0}],pigs:[],items:{vaccine:0,supplement:0,amulet:0},soldThisRound:0};
-}
-function mkPig(size){return {id:++uid,size,vacc:false,x:0,y:0,fedRound:-1,matedRound:-1}}
 
 /* ===== placement: field boards live on one shared fine grid; pigs use global
    (x,y) cells and may straddle any seam between adjacent boards ===== */
 /* pasture = bounding box of all boards + which global cells are farmable */
-function pasture(p){
-  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
-  for(const b of p.fields){ if(b.bx<minx)minx=b.bx; if(b.by<miny)miny=b.by;
-    if(b.bx+FW>maxx)maxx=b.bx+FW; if(b.by+FH>maxy)maxy=b.by+FH; }
-  const W=maxx-minx, H=maxy-miny;
-  const farm=Array.from({length:H},()=>Array(W).fill(false));
-  for(const b of p.fields) for(let y=0;y<FH;y++)for(let x=0;x<FW;x++) farm[b.by-miny+y][b.bx-minx+x]=true;
-  return {minx,miny,W,H,farm};
-}
-/* keep the top-left board at (0,0); shift pigs with it so coords stay non-negative */
-function normalize(p){
-  let minx=Infinity,miny=Infinity;
-  for(const b of p.fields){ if(b.bx<minx)minx=b.bx; if(b.by<miny)miny=b.by; }
-  if(!isFinite(minx)||(!minx&&!miny)) return;
-  for(const b of p.fields){ b.bx-=minx; b.by-=miny; }
-  for(const pg of p.pigs){ pg.x-=minx; pg.y-=miny; }
-}
-function addField(p){
-  let maxx=0; for(const b of p.fields) maxx=Math.max(maxx,b.bx+FW);
-  p.fields.push({bx:maxx,by:0}); normalize(p);
-}
-function occGrid(p,ignoreId){
-  const {W,H}=pasture(p);
-  const g=Array.from({length:H},()=>Array(W).fill(false));
-  for(const pg of p.pigs){ if(pg.id===ignoreId) continue;
-    const [w,h]=SPAN[pg.size];
-    for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++){ const yy=pg.y+dy,xx=pg.x+dx;
-      if(yy>=0&&yy<H&&xx>=0&&xx<W) g[yy][xx]=true; }}
-  return g;
-}
-/* a pig fits at (x,y) iff every covered cell is farmable and unoccupied */
-function canPlaceAt(p,x,y,size,ignoreId){
-  const [w,h]=SPAN[size]; const {W,H,farm}=pasture(p);
-  if(x<0||y<0||x+w>W||y+h>H) return false;
-  const g=occGrid(p,ignoreId);
-  for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++){ if(!farm[y+dy][x+dx]||g[y+dy][x+dx]) return false; }
-  return true;
-}
-function findSpot(p,size,ignoreId){
-  const [w,h]=SPAN[size]; const {W,H,farm}=pasture(p); const g=occGrid(p,ignoreId);
-  for(let y=0;y<=H-h;y++)for(let x=0;x<=W-w;x++){
-    let ok=true;
-    for(let dy=0;dy<h&&ok;dy++)for(let dx=0;dx<w&&ok;dx++){ if(!farm[y+dy][x+dx]||g[y+dy][x+dx]) ok=false; }
-    if(ok) return {x,y};
-  }
-  return null;
-}
-/* greedy repack: place pigs largest-first onto the farmable region; positions or null */
-function packAll(p,extraSizes,grow){
-  const list=p.pigs.map(pg=>({id:pg.id,size:pg.id===(grow&&grow.id)?grow.size:pg.size}));
-  (extraSizes||[]).forEach((s,k)=>list.push({id:'new'+k+'_'+Math.abs(uid+list.length),size:s,isNew:true}));
-  const area=s=>SPAN[s][0]*SPAN[s][1];
-  list.sort((a,b)=>area(b.size)-area(a.size));
-  const {W,H,farm}=pasture(p);
-  const used=Array.from({length:H},()=>Array(W).fill(false));
-  const pos={};
-  for(const it of list){
-    const [w,h]=SPAN[it.size]; let placed=false;
-    for(let y=0;y<=H-h&&!placed;y++)
-      for(let x=0;x<=W-w&&!placed;x++){
-        let ok=true;
-        for(let dy=0;dy<h&&ok;dy++)for(let dx=0;dx<w&&ok;dx++){ if(!farm[y+dy][x+dx]||used[y+dy][x+dx]) ok=false; }
-        if(ok){ for(let dy=0;dy<h;dy++)for(let dx=0;dx<w;dx++) used[y+dy][x+dx]=true;
-          pos[it.id]={x,y}; placed=true; }
-      }
-    if(!placed) return null;
-  }
-  return pos;
-}
-function applyPack(p,pos){ p.pigs.forEach(pg=>{ const q=pos[pg.id]; if(q){pg.x=q.x;pg.y=q.y;} }); }
-/* try to place a new pig: direct spot, else full repack */
-function acquirePig(p,size){
-  const spot=findSpot(p,size);
-  if(spot){ const pg=mkPig(size); Object.assign(pg,spot); p.pigs.push(pg); return pg; }
-  const pos=packAll(p,[size]);
-  if(pos){ applyPack(p,pos); const nk=Object.keys(pos).find(k=>String(k).startsWith('new'));
-    const pg=mkPig(size); Object.assign(pg,pos[nk]); p.pigs.push(pg); return pg; }
-  return null;
-}
-function canFitNew(p,size){ return !!(findSpot(p,size)||packAll(p,[size])); }
-/* grow a pig one step; keeps anchor if possible, else repack; false if impossible */
-function growPig(p,pg){
-  const ns=NEXT[pg.size]; if(!ns) return false;
-  if(canPlaceAt(p,pg.x,pg.y,ns,pg.id)){ pg.size=ns; return true; }
-  const spot=findSpot(p,ns,pg.id); if(spot){ pg.size=ns; Object.assign(pg,spot); return true; }
-  const pos=packAll(p,null,{id:pg.id,size:ns});
-  if(pos){ pg.size=ns; applyPack(p,pos); return true; }
-  return false;
-}
-function canGrow(p,pg){ const ns=NEXT[pg.size]; if(!ns) return false;
-  return canPlaceAt(p,pg.x,pg.y,ns,pg.id)||!!findSpot(p,ns,pg.id)||!!packAll(p,null,{id:pg.id,size:ns}); }
-/* snapshot/restore board+pig coords, so a rejected board move can revert cleanly */
-function snapPlay(p){ return {fields:p.fields.map(b=>({bx:b.bx,by:b.by})),
-  pigs:p.pigs.map(pg=>({id:pg.id,x:pg.x,y:pg.y}))}; }
-function restorePlay(p,s){ p.fields.forEach((b,i)=>{ b.bx=s.fields[i].bx; b.by=s.fields[i].by; });
-  const m={}; s.pigs.forEach(q=>m[q.id]=q);
-  p.pigs.forEach(pg=>{ const q=m[pg.id]; if(q){ pg.x=q.x; pg.y=q.y; } }); }
-
 /* ===== season deck: per card, shared quantities + an effect ===== */
-const EFFECTS={
-  calm:{txt:'Calm season — no effect.',run:()=>{}},
-  love:{txt:'Season of Love — 1 free Piglet per pair of Average/Big pigs (if it fits).',run:(p,i)=>{
-    const pairs=Math.floor(p.pigs.filter(x=>x.size==='average'||x.size==='big').length/2);
-    let got=0; for(let k=0;k<pairs;k++){ const pg=acquirePig(p,'piglet'); if(pg){got++; markBorn(i,pg);} }
-    if(pairs&&!got) log('sys',`${esc(p.name)} had no room for love-piglets.`);
-    else if(got) logP(i,`${esc(p.name)} gained ${got} piglet(s) from the Season of Love.`);
-  }},
-  subsidy:{txt:'Farm subsidy — gain $1 per Piglet you own.',run:(p,i)=>{
-    const n=p.pigs.filter(x=>x.size==='piglet').length;
-    if(n){p.coins+=n; floatCoin(i,n); logP(i,`${esc(p.name)} got $${n} subsidy.`);}
-  }},
-  boom:{txt:'Market boom — gain $1 per pig you sold this round.',run:(p,i)=>{
-    if(p.soldThisRound){p.coins+=p.soldThisRound; floatCoin(i,p.soldThisRound);
-      logP(i,`${esc(p.name)} got $${p.soldThisRound} market bonus.`);}
-  }},
-  gift:{txt:'Vet visit — each farmer gets 1 free Vaccine.',run:(p,i)=>{p.items.vaccine++;}},
-};
-function buildDeck(){
-  const pick=(arr)=>arr[Math.floor(Math.random()*arr.length)];
-  const deck=[];
-  for(let s=0;s<4;s++){
-    const pool=s===1?['love','love','calm','subsidy','boom','gift']:['calm','calm','subsidy','boom','gift','love'];
-    for(let c=0;c<4;c++){
-      deck.push({season:s,
-        qty:{feed:6+Math.floor(Math.random()*4),mate:6+Math.floor(Math.random()*4),
-             buy:6+Math.floor(Math.random()*4),sell:6+Math.floor(Math.random()*4)},
-        effect:pick(pool)});
-    }
-  }
-  return deck;
-}
 let deck=[];
 
 /* ===== rendering ===== */
@@ -551,21 +436,6 @@ function buyOptions(p){
     {k:'field',label:'🟩 Field board',cost:fieldPrice(p.fields.length+1),ok:()=>p.coins>=fieldPrice(p.fields.length+1)},
   ];
 }
-function doBuy(i,k){
-  const p=players[i];
-  if(k==='field'){ const c=fieldPrice(p.fields.length+1); if(p.coins<c) return false;
-    p.coins-=c; addField(p); floatCoin(i,-c);
-    logP(i,`${esc(p.name)} bought field #${p.fields.length} ($${c}).`); return true; }
-  if(ITEM_PRICE[k]!==undefined){ if(p.coins<ITEM_PRICE[k]) return false;
-    p.coins-=ITEM_PRICE[k]; p.items[k]++; floatCoin(i,-ITEM_PRICE[k]);
-    logP(i,`${esc(p.name)} bought a ${k} ($${ITEM_PRICE[k]}).`); return true; }
-  if(VAL[k]===undefined||p.coins<VAL[k]) return false;
-  const pg=acquirePig(p,k);
-  if(!pg){ log('sys',`${esc(p.name)} couldn't fit a ${k} — purchase cancelled.`); return false; }
-  p.coins-=VAL[k]; floatCoin(i,-VAL[k]); markBorn(i,pg);
-  logP(i,`${esc(p.name)} bought a ${k} ($${VAL[k]}).`);
-  return true;
-}
 /* human buy loop: n purchases, Done allowed */
 function humanBuys(i,n,title,compensate){
   return new Promise(res=>{
@@ -595,15 +465,6 @@ function humanBuys(i,n,title,compensate){
 }
 
 /* ===== AI ===== */
-function variedBest(items,score,maxGap=0,chance=.25){
-  if(!items.length) return null;
-  const ranked=[...items].sort((a,b)=>score(b)-score(a));
-  const best=score(ranked[0]);
-  const alternatives=ranked.slice(1).filter(x=>best-score(x)<=maxGap);
-  if(alternatives.length&&Math.random()<chance)
-    return alternatives[Math.floor(Math.random()*alternatives.length)];
-  return ranked[0];
-}
 function aiOpening(i){
   const p=players[i];
   const plan=['small','small','average','vaccine','supplement'];
@@ -612,23 +473,6 @@ function aiOpening(i){
     if(o&&o.ok()) doBuy(i,k);
     else { const alt=buyOptions(p).find(x=>x.k==='piglet'&&x.ok()); if(alt) doBuy(i,'piglet'); }
   }
-}
-function aiPick(i){
-  const p=players[i];
-  const seasonRound=state.round;             // 1..4 within season
-  const finalSeason=state.season===3;
-  const growable=p.pigs.filter(x=>canGrow(p,x)&&x.fedRound!==state.roundSerial);
-  const mateable=p.pigs.filter(x=>(x.size==='average'||x.size==='big')&&x.matedRound!==state.roundSerial);
-  const needVacc=p.pigs.filter(x=>!x.vacc&&VAL[x.size]>=6).length;
-  // near season end: secure vaccines for valuable pigs
-  if(seasonRound>=3&&needVacc>p.items.vaccine&&p.coins>=needVacc-p.items.vaccine) return 'buy';
-  if(p.coins<4&&p.pigs.length>1) return 'sell';
-  const options=[];
-  if(growable.length) options.push({action:'feed',score:growable.length>=2?3:2});
-  if(mateable.length>=2&&canFitNew(p,'piglet')) options.push({action:'mate',score:3});
-  if(p.coins>=6&&!finalSeason) options.push({action:'buy',score:2});
-  if(p.pigs.length) options.push({action:'sell',score:1});
-  return (variedBest(options,x=>x.score)||{action:'buy'}).action;
 }
 async function aiExecute(i,action,n){
   const p=players[i]; let used=0;
@@ -826,20 +670,6 @@ function showReveal(choices,allot){
     setTimeout(()=>{clearSub();res()},1600/(window.__speed||1));
   });
 }
-function distribute(card,choices){
-  const allot=new Array(nP).fill(0);
-  ACTIONS.forEach(a=>{
-    const group=[];
-    for(let k=0;k<nP;k++){ const i=(state.startIdx+k)%nP; if(choices[i]===a) group.push(i); }
-    if(!group.length) return;
-    let pool=card.qty[a];
-    while(pool>0){ let gave=false;
-      for(const i of group){ if(pool<=0) break; allot[i]++; pool--; gave=true; }
-      if(!gave) break; }
-  });
-  return allot;
-}
-
 /* ===== season change ===== */
 function humanVaccineWindow(i){
   return new Promise(res=>{
@@ -982,6 +812,7 @@ function setup(){
     <p>Pass-and-play for 2–3 farmers, by the official rules. Secret picks — others look away.</p>
     <div class="seatcount" id="seatcount"></div>
     <div id="seatrows"></div>
+    <button class="btn big" id="onlineBtn" style="margin-top:16px">Play Online</button>
     <button class="btn big primary" id="startBtn" style="margin-top:16px">Start game 🌾</button>
   </div>`;
   document.body.appendChild(o);
@@ -1004,6 +835,7 @@ function setup(){
       sr.appendChild(row);}
   }
   drawCount(); drawSeats();
+  o.querySelector("#onlineBtn").onclick=()=>{o.remove();onlineSetup()};
   o.querySelector('#startBtn').onclick=()=>{
     nP=count; players=[];
     for(let i=0;i<count;i++) players.push(mkPlayer(seats[i].name.trim()||('Player '+(i+1)),seats[i].human));
@@ -1031,19 +863,24 @@ async function boot(){
   let drag=null; // {kind,i,...,startX,startY,moved,ghost,cand}
   function pastureOf(i){return document.querySelector(`#fields-${i} .pasture`)}
   function killGhost(){ if(drag&&drag.ghost){drag.ghost.remove();drag.ghost=null;} }
+  function swallowDragClick(){
+    const swallow=ev=>{ev.stopPropagation();ev.preventDefault();document.removeEventListener('click',swallow,true);};
+    document.addEventListener('click',swallow,true);
+    setTimeout(()=>document.removeEventListener('click',swallow,true),80);
+  }
   document.addEventListener('pointerdown',e=>{
     if(!(e.target.closest)) return;
     const tile=e.target.closest('.pigtile');
     if(tile){
       const pv=tile.closest('.pasture'); if(!pv) return;
-      const i=+pv.dataset.p; if(!players[i]||!players[i].human) return;
+      const i=+pv.dataset.p; if(!players[i]||!players[i].human||(window.hpOnline&&!window.hpOnline.canMove(i))) return;
       const pg=players[i].pigs.find(x=>x.id===+tile.dataset.id); if(!pg) return;
       drag={kind:'pig',i,pg,el:tile,startX:e.clientX,startY:e.clientY,moved:false,ghost:null,cand:null};
       return;
     }
     const fb=e.target.closest('.fieldboard');
     if(fb){
-      const i=+fb.dataset.p; if(!players[i]||!players[i].human) return;
+      const i=+fb.dataset.p; if(!players[i]||!players[i].human||(window.hpOnline&&!window.hpOnline.canMove(i))) return;
       if(players[i].fields.length<2) return; // one board — nothing to rearrange
       const f=+fb.dataset.f; const b=players[i].fields[f];
       drag={kind:'board',i,f,el:fb,startX:e.clientX,startY:e.clientY,moved:false,ghost:null,cand:null,bx0:b.bx,by0:b.by};
@@ -1102,7 +939,8 @@ async function boot(){
   });
   document.addEventListener('pointerup',()=>{
     if(!drag) return;
-    const d=drag; drag=null; killGhost();
+    const d=drag; killGhost(); drag=null;
+    if(d.moved&&window.hpOnline){ swallowDragClick(); if(d.cand)window.hpOnline.move(d); render(); return; }
     if(d.moved){
       const p=players[d.i];
       if(d.kind==='pig'){
@@ -1116,9 +954,7 @@ async function boot(){
         }
       }
       // swallow the click that follows a real drag so pick-handlers don't fire
-      const swallow=ev=>{ev.stopPropagation();ev.preventDefault();document.removeEventListener('click',swallow,true);};
-      document.addEventListener('click',swallow,true);
-      setTimeout(()=>document.removeEventListener('click',swallow,true),80);
+      swallowDragClick();
       render();
       bindPick(); // re-arm any active pick UI lost to the re-render
     }
@@ -1134,7 +970,8 @@ function autoDemo(){
   window.__speed=window.__speed||2;
   boot();
 }
-if(location.hash.indexOf('demo')>=0) autoDemo(); else setup();
+if(location.hash.indexOf('demo')>=0) autoDemo(); else if(!location.hash.startsWith("#room=")&&location.hash!=="#online") setup();
 </script>
+<script src="online.js"></script>
 </body>
 </html>

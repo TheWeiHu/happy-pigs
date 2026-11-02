@@ -1,0 +1,25 @@
+[Unit]
+Description=Happy Pigs Multiplayer
+After=network.target
+
+[Service]
+User=happy-pigs
+Group=happy-pigs
+WorkingDirectory=/opt/happy-pigs/current
+EnvironmentFile=/etc/happy-pigs.env
+ExecStart=/opt/happy-pigs/node/bin/node --experimental-sqlite server/node.cjs
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+StateDirectory=happy-pigs
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/happy-pigs
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

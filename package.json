@@ -1,0 +1,20 @@
+{
+  "name": "happy-pigs",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "dev": "npm run build && node --experimental-sqlite server/node.cjs",
+    "test": "npm run build && node tests/game-logic.test.js && node --experimental-sqlite --test tests/room.test.cjs tests/server.test.cjs",
+    "test:e2e": "playwright test",
+    "start": "node --experimental-sqlite server/node.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  },
+  "dependencies": {
+    "ws": "8.22.1"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
