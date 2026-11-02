@@ -23,6 +23,7 @@ function readBody(req){
 }
 function createServer({dataDir=process.env.HAPPY_PIGS_DATA_DIR||path.join(os.homedir(),'Dropbox','Apps','happy-pigs-data'),
   publicOrigin=process.env.PUBLIC_ORIGIN||'',trustProxy=process.env.TRUST_PROXY==='1',clock=Date.now}={}){
+  const publicOrigins=new Set(publicOrigin.split(',').map(origin=>origin.trim()).filter(Boolean));
   mkdirSync(dataDir,{recursive:true,mode:0o700});
   const db=new DatabaseSync(path.join(dataDir,'rooms.sqlite'));
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, expires INTEGER NOT NULL, data TEXT NOT NULL); CREATE INDEX IF NOT EXISTS rooms_expiry ON rooms(expires)');
@@ -52,7 +53,7 @@ function createServer({dataDir=process.env.HAPPY_PIGS_DATA_DIR||path.join(os.hom
     }
     return ++r.count>max;
   }
-  function originOK(req){return !req.headers.origin||req.headers.origin===(publicOrigin||`http://${req.headers.host}`)}
+  function originOK(req){return !req.headers.origin||(publicOrigins.size?publicOrigins.has(req.headers.origin):req.headers.origin===`http://${req.headers.host}`)}
   function authenticated(id){return [...(peers.get(id)||[])].filter(ws=>ws.seat!==undefined&&ws.readyState===WebSocket.OPEN)}
   function snapshot(ws,room){
     if(ws.seat===undefined||ws.readyState!==WebSocket.OPEN)return;

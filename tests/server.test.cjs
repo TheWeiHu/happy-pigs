@@ -44,3 +44,16 @@ test('WebSockets reject untrusted origins and stop serving expired rooms',async(
     const closed=once(ws,'close');ws.send(JSON.stringify({type:'ready'}));assert.equal((await closed)[0],4004);
   },{clock:()=>now});
 });
+test('canonical and legacy origins can recover the same room without allowing other origins',()=>withServer(async base=>{
+  const created=await fetch(base+'/api/rooms',{method:'POST',headers:{Origin:'https://game.example'},body:JSON.stringify({name:'Host'})});
+  assert.equal(created.status,201);const {room,token}=await created.json();
+  for(const origin of ['https://game.example','https://legacy.example']){
+    assert.equal((await fetch(base+`/api/rooms/${room}/connect`,{headers:{Origin:origin}})).status,200);
+    const ws=new WebSocket(base.replace('http','ws')+`/api/rooms/${room}/connect`,{headers:{Origin:origin}});
+    await once(ws,'open');const snapshot=once(ws,'message');ws.send(JSON.stringify({type:'auth',token}));
+    assert.equal(JSON.parse((await snapshot)[0]).me,0);const closed=once(ws,'close');ws.close();await closed;
+  }
+  for(const origin of ['https://game.example.evil.test','https://legacy.example.evil.test','null']){
+    assert.equal((await fetch(base+`/api/rooms/${room}/connect`,{headers:{Origin:origin}})).status,403);
+  }
+},{publicOrigin:'https://game.example, https://legacy.example'}));
