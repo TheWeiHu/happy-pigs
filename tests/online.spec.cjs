@@ -44,7 +44,10 @@ test('two independent browsers, private choices, refresh, disconnect, full match
   await guest.locator('.controls').scrollIntoViewIfNeeded();
   await guest.screenshot({path:shot('multiplayer-game-mobile.png')});
   const width=await guest.evaluate(()=>({scroll:document.documentElement.scrollWidth,width:innerWidth}));expect(width.scroll).toBeLessThanOrEqual(width.width);
-  await guestContext.setOffline(true);await guest.waitForTimeout(500);await guestContext.setOffline(false);
+  await guestContext.setOffline(true);
+  await expect(guest.locator('.online-bar')).toContainText('Disconnected');
+  await expect(guest.getByRole('button',{name:/^Done/})).toBeDisabled();
+  await guestContext.setOffline(false);
   await expect(guest.locator('.online-bar')).toContainText('Online · Hamlet',{timeout:20000});
   await done(guest);await phase(host,'choose');
   // Complete all remaining rounds through visible controls in separate browser contexts.

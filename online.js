@@ -1,5 +1,9 @@
 /* Online controls render server snapshots; only the server commits moves. */
 function onlineSetup(roomId=null){
+  const hosted=document.querySelector('meta[name="online-origin"]')?.content;
+  if(hosted&&(location.protocol==='file:'||(location.protocol==='https:'&&location.origin!==new URL(hosted).origin))){
+    const destination=new URL(hosted);destination.hash=roomId?`room=${roomId}`:'online';location.assign(destination.href);return;
+  }
   if(location.protocol==='file:'){
     const o=onlineModal('Play Online');
     o.box.append(paragraph('Online play needs the hosted multiplayer site. Local play still works from this file.'));
@@ -44,7 +48,7 @@ function onlineModal(title){
   const h=document.createElement('h2');h.textContent=title;box.append(h);document.body.append(o);return o;
 }
 function connectRoom(room,token){
-  let socket,retry=0,retryTimer,heartbeat,view=null,pending=null,connected=false,stopped=false,lobby=null,selection=null,lastSeen=Date.now();
+  let socket,retry=0,retryTimer,heartbeat,view=null,pending=null,connected=false,stopped=false,lobby=null,selection=null,lastSeen=Date.now(),generation=0;
   const bar=document.createElement('div');bar.className='online-bar';
   const connection=document.createElement('span');connection.setAttribute('role','status');
   const message=document.createElement('span');message.setAttribute('role','alert');
@@ -52,7 +56,7 @@ function connectRoom(room,token){
   bar.append(connection,message,exit);document.querySelector('header').after(bar);
   function status(text){connection.textContent=text}
   function send(type,args={}){
-    if(!connected||pending||!view)return;
+    if(!connected||pending||!view||socket?.readyState!==WebSocket.OPEN)return;
     selection=null;
     pending={...args,type,id:crypto.randomUUID(),version:view.version,turnId:view.turnId};
     socket.send(JSON.stringify(pending));message.textContent='';draw();
@@ -183,20 +187,26 @@ function connectRoom(room,token){
     sub.append(control(view.phase==='opening'?'Done':`Done (+$${view.left})`,'done'));
   }
   async function connect(){
+    if(stopped||!navigator.onLine)return;
+    const attempt=++generation;connected=false;clearInterval(heartbeat);clearTimeout(retryTimer);
+    socket?.close();
     status(retry?'Reconnecting… Your Seat Is Saved':'Connecting…');
+    draw();
     const url=new URL(`/api/rooms/${room}/connect`,location.href);url.protocol=location.protocol==='https:'?'wss:':'ws:';
     try{
       const check=await fetch(`/api/rooms/${room}/connect`,{signal:AbortSignal.timeout(10000)});
+      if(stopped||attempt!==generation)return;
       if(check.status===404){stopped=true;status('Room Not Found Or Expired');draw();return}
       if(!check.ok)throw new Error('Server unavailable');
     }catch{
-      if(!stopped){status('Disconnected · Reconnecting…');draw();retryTimer=setTimeout(connect,Math.min(1000*2**retry++,10000))}
+      if(!stopped&&attempt===generation){status('Disconnected · Reconnecting…');draw();retryTimer=setTimeout(connect,Math.min(1000*2**retry++,10000))}
       return;
     }
-    if(stopped)return;
-    socket=new WebSocket(url);
-    socket.onopen=()=>socket.send(JSON.stringify({type:'auth',token}));
-    socket.onmessage=e=>{
+    if(stopped||attempt!==generation)return;
+    const current=new WebSocket(url);socket=current;
+    current.onopen=()=>{if(attempt===generation)current.send(JSON.stringify({type:'auth',token}))};
+    current.onmessage=e=>{
+      if(stopped||attempt!==generation)return;
       lastSeen=Date.now();
       if(e.data==='pong')return;
       const msg=JSON.parse(e.data);
@@ -219,18 +229,22 @@ function connectRoom(room,token){
         message.textContent=msg.message;draw();
       }
     };
-    socket.onclose=e=>{
+    current.onclose=e=>{
+      if(stopped||attempt!==generation)return;
       connected=false;clearInterval(heartbeat);
-      if(stopped)return;
       if([4001,4003,4004].includes(e.code)){
         stopped=true;status(e.code===4001?'This Seat Is Open In Another Tab':e.code===4004?'Room Expired':'Unable To Restore This Seat');draw();return;
       }
       status('Disconnected · Reconnecting…');draw();
       retryTimer=setTimeout(connect,Math.min(1000*2**retry++,10000));
     };
-    socket.onerror=()=>{message.textContent='Cannot reach the room server. Retrying…'};
+    current.onerror=()=>{if(attempt===generation)message.textContent='Cannot reach the room server. Retrying…'};
   }
-  window.addEventListener('offline',()=>socket?.close(4000,'Connection lost'));
+  window.addEventListener('offline',()=>{
+    generation++;connected=false;clearTimeout(retryTimer);clearInterval(heartbeat);
+    socket?.close(4000,'Connection lost');status('Disconnected · Waiting For Network…');draw();
+  });
+  window.addEventListener('online',()=>{if(!stopped)connect()});
   window.hpOnline={
     canMove:i=>connected&&!pending&&view?.me===i&&!['lobby','finished'].includes(view.phase),
     move:d=>send(d.kind==='pig'?'movePig':'moveBoard',d.kind==='pig'?{pig:d.pg.id,...d.cand}:{field:d.f,...d.cand}),
@@ -245,3 +259,5 @@ if(location.hash.startsWith('#room=')){
     if(token)connectRoom(room,token);else onlineSetup(room);
   }else onlineSetup();
 }
+
+if(location.hash==='#online')onlineSetup();

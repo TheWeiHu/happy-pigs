@@ -4,12 +4,12 @@ const {mkdtempSync,rmSync}=require('node:fs');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 
-test('saved game and private choice survive a Worker process restart',async({browser})=>{
+test('saved game and private choice survive a server process restart',async({browser})=>{
   const storage=mkdtempSync(path.join(tmpdir(),'happy-pigs-restart-'));
   let processHandle;
   async function start(){
-    processHandle=spawn(process.execPath,['node_modules/wrangler/bin/wrangler.js','dev','--port','8790','--persist-to',storage],{
-      cwd:path.join(__dirname,'..'),stdio:'ignore',detached:true});
+    processHandle=spawn(process.execPath,['--experimental-sqlite','server/node.cjs'],{
+      env:{...process.env,PORT:'8790',HAPPY_PIGS_DATA_DIR:storage},cwd:path.join(__dirname,'..'),stdio:'ignore',detached:true});
     await expect.poll(async()=>{try{return (await fetch('http://127.0.0.1:8790')).status}catch{return 0}},{timeout:30000}).toBe(200);
   }
   async function stop(){

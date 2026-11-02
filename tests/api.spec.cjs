@@ -12,7 +12,7 @@ async function channel(base,room,token){
   };
   return {ws,messages,latest,send};
 }
-test('real Worker rejects forged origins and credentials, hides secrets, and deduplicates moves',async({request,baseURL})=>{
+test('real server rejects forged origins and credentials, hides secrets, and deduplicates moves',async({request,baseURL})=>{
   const denied=await request.post('/api/rooms',{headers:{Origin:'https://untrusted.example'},data:{name:'Attacker'}});
   expect(denied.status()).toBe(403);
   const created=await request.post('/api/rooms',{data:{name:'Host'}});expect(created.status()).toBe(201);
