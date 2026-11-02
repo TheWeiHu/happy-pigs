@@ -152,7 +152,7 @@ function connectRoom(room,token){
       sub.append(control('Continue','done'));return;
     }
     const action=view.phase==='opening'?'buy':view.choices[view.me];
-    subPrompt(`<b>${view.phase==='opening'?'Opening Purchases':ANAME[action]}</b> — ${view.left} Left. ${action==='buy'?'':'Select Your Pigs Below.'}`);
+    subPrompt(`<b>${view.phase==='opening'?'Opening Purchases':ANAME[action]}</b> — ${view.left} Left. ${action==='buy'?'':'Select Your Pigs.'}`);
     if(action==='buy'){
       buyOptions(p).forEach(o=>{
         const b=control('', 'buy',{item:o.k});b.innerHTML=`${o.label} <span class="c">$${o.cost}</span>`;
